@@ -2,6 +2,7 @@
 CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
   device_id TEXT UNIQUE NOT NULL,
+  api_key TEXT UNIQUE,
   email TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -62,3 +63,4 @@ CREATE INDEX IF NOT EXISTS idx_income_user_date ON income(user_id, date_epoch_da
 CREATE INDEX IF NOT EXISTS idx_income_source ON income(source_id);
 CREATE INDEX IF NOT EXISTS idx_savings_goals_user ON savings_goals(user_id);
 CREATE INDEX IF NOT EXISTS idx_savings_contributions_goal_date ON savings_contributions(goal_id, contribution_date);
+CREATE INDEX IF NOT EXISTS idx_users_api_key ON users(api_key);

@@ -1,24 +1,32 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { requireAuth } = require('../middleware/auth');
+
+router.use(requireAuth);
+
+function isValidAmount(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && Number.isInteger(value);
+}
 
 /**
  * Add expense
  * POST /api/data/expense
- * Body: { userId: number, amountRupees: number, categoryId: string, dateEpochDay: number,
+ * Body: { amountRupees: number, categoryId: string, dateEpochDay: number,
  *         city?: string, latitude?: number, longitude?: number }
+ * userId comes from the authenticated token, never from the body.
  */
 router.post('/expense', async (req, res) => {
   try {
-    const { userId, amountRupees, categoryId, dateEpochDay, city, latitude, longitude } = req.body;
+    const { amountRupees, categoryId, dateEpochDay, city, latitude, longitude } = req.body;
 
-    if (!userId || !amountRupees || !categoryId || dateEpochDay === undefined) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    if (!isValidAmount(amountRupees) || !categoryId || dateEpochDay === undefined) {
+      return res.status(400).json({ error: 'Missing or invalid fields' });
     }
 
     const result = await pool.query(
       'INSERT INTO expenses (user_id, amount_rupees, category_id, date_epoch_day, city, latitude, longitude) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id',
-      [userId, amountRupees, categoryId, dateEpochDay, city || null, latitude || null, longitude || null]
+      [req.userId, amountRupees, categoryId, dateEpochDay, city || null, latitude || null, longitude || null]
     );
 
     res.status(201).json({ id: result.rows[0].id, message: 'Expense recorded' });
@@ -31,19 +39,19 @@ router.post('/expense', async (req, res) => {
 /**
  * Add income
  * POST /api/data/income
- * Body: { userId: number, amountRupees: number, sourceId?: string, customSourceLabel?: string, dateEpochDay: number }
+ * Body: { amountRupees: number, sourceId?: string, customSourceLabel?: string, dateEpochDay: number }
  */
 router.post('/income', async (req, res) => {
   try {
-    const { userId, amountRupees, sourceId, customSourceLabel, dateEpochDay } = req.body;
+    const { amountRupees, sourceId, customSourceLabel, dateEpochDay } = req.body;
 
-    if (!userId || !amountRupees || dateEpochDay === undefined) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    if (!isValidAmount(amountRupees) || dateEpochDay === undefined) {
+      return res.status(400).json({ error: 'Missing or invalid fields' });
     }
 
     const result = await pool.query(
       'INSERT INTO income (user_id, amount_rupees, source_id, custom_source_label, date_epoch_day) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-      [userId, amountRupees, sourceId || null, customSourceLabel || null, dateEpochDay]
+      [req.userId, amountRupees, sourceId || null, customSourceLabel || null, dateEpochDay]
     );
 
     res.status(201).json({ id: result.rows[0].id, message: 'Income recorded' });
@@ -56,19 +64,22 @@ router.post('/income', async (req, res) => {
 /**
  * Add savings goal
  * POST /api/data/savings-goal
- * Body: { userId: number, name: string, emoji: string, targetRupees?: number, targetMonthYear?: string, isGeneral: boolean }
+ * Body: { name: string, emoji: string, targetRupees?: number, targetMonthYear?: string, isGeneral: boolean }
  */
 router.post('/savings-goal', async (req, res) => {
   try {
-    const { userId, name, emoji, targetRupees, targetMonthYear, isGeneral } = req.body;
+    const { name, emoji, targetRupees, targetMonthYear, isGeneral } = req.body;
 
-    if (!userId || !name || !emoji) {
+    if (!name || typeof name !== 'string' || !emoji) {
       return res.status(400).json({ error: 'Missing required fields' });
+    }
+    if (targetRupees !== undefined && targetRupees !== null && !isValidAmount(targetRupees)) {
+      return res.status(400).json({ error: 'Invalid targetRupees' });
     }
 
     const result = await pool.query(
       'INSERT INTO savings_goals (user_id, name, emoji, target_rupees, target_month_year, is_general) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
-      [userId, name, emoji, targetRupees || null, targetMonthYear || null, isGeneral || false]
+      [req.userId, name, emoji, targetRupees || null, targetMonthYear || null, isGeneral || false]
     );
 
     res.status(201).json({ id: result.rows[0].id, message: 'Savings goal created' });
@@ -82,13 +93,23 @@ router.post('/savings-goal', async (req, res) => {
  * Add savings contribution
  * POST /api/data/savings-contribution
  * Body: { goalId: number, amountRupees: number, contributionDate: number }
+ * goalId must belong to the authenticated user (fixes IDOR — previously any
+ * caller could post a contribution onto any other user's goal by guessing its id).
  */
 router.post('/savings-contribution', async (req, res) => {
   try {
     const { goalId, amountRupees, contributionDate } = req.body;
 
-    if (!goalId || !amountRupees || contributionDate === undefined) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    if (!goalId || !isValidAmount(amountRupees) || contributionDate === undefined) {
+      return res.status(400).json({ error: 'Missing or invalid fields' });
+    }
+
+    const goal = await pool.query(
+      'SELECT id FROM savings_goals WHERE id = $1 AND user_id = $2',
+      [goalId, req.userId]
+    );
+    if (goal.rows.length === 0) {
+      return res.status(404).json({ error: 'Goal not found' });
     }
 
     const result = await pool.query(
@@ -104,15 +125,14 @@ router.post('/savings-contribution', async (req, res) => {
 });
 
 /**
- * Get all expenses for a user
- * GET /api/data/expenses/:userId
+ * Get all expenses for the authenticated user
+ * GET /api/data/expenses
  */
-router.get('/expenses/:userId', async (req, res) => {
+router.get('/expenses', async (req, res) => {
   try {
-    const { userId } = req.params;
     const result = await pool.query(
       'SELECT * FROM expenses WHERE user_id = $1 ORDER BY date_epoch_day DESC',
-      [userId]
+      [req.userId]
     );
     res.json(result.rows);
   } catch (error) {
@@ -122,15 +142,14 @@ router.get('/expenses/:userId', async (req, res) => {
 });
 
 /**
- * Get all income for a user
- * GET /api/data/income/:userId
+ * Get all income for the authenticated user
+ * GET /api/data/income
  */
-router.get('/income/:userId', async (req, res) => {
+router.get('/income', async (req, res) => {
   try {
-    const { userId } = req.params;
     const result = await pool.query(
       'SELECT * FROM income WHERE user_id = $1 ORDER BY date_epoch_day DESC',
-      [userId]
+      [req.userId]
     );
     res.json(result.rows);
   } catch (error) {

@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { requireAdmin } = require('../middleware/adminAuth');
+
+router.use(requireAdmin);
 
 /**
  * TOP SPENDING CATEGORIES (Most valuable for data buyers like Nestle)

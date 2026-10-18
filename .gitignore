@@ -7,3 +7,7 @@ dist/
 build/
 .idea/
 .vscode/
+
+# Security assessment — this repo is public; don't publish exploit details,
+# even for issues already fixed. Keep it local only.
+PENTEST_REPORT.md
